@@ -51,6 +51,7 @@ import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.Point;
+import android.graphics.drawable.GradientDrawable;
 import android.graphics.Rect;
 import android.hardware.input.InputManager;
 import android.media.AudioManager;
@@ -62,6 +63,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.util.Rational;
 import android.view.Display;
+import android.view.Gravity;
 import android.view.InputDevice;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
@@ -69,6 +71,7 @@ import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.View.OnGenericMotionListener;
 import android.view.View.OnSystemUiVisibilityChangeListener;
 import android.view.View.OnTouchListener;
@@ -146,6 +149,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private TextView notificationOverlayView;
     private int requestedNotificationOverlayVisibility = View.GONE;
     private TextView performanceOverlayView;
+
+    // Monitor switch button. Sunshine switches the captured display when it receives
+    // Ctrl+Alt+Shift+F<n> (F1 = first display, F2 = second, ...), so this needs no host changes.
+    private static final int HOST_MONITOR_COUNT = 2;
+    private TextView monitorButton;
+    private int hostMonitorIndex = 0; // Sunshine starts on the first display unless output_name is set
+    private boolean hostMonitorKnown = false;
 
     private MediaCodecDecoderRenderer decoderRenderer;
     private boolean reportedCrash;
@@ -271,6 +281,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         notificationOverlayView = findViewById(R.id.notificationOverlay);
 
         performanceOverlayView = findViewById(R.id.performanceOverlay);
+
+        setupMonitorButton();
 
         inputCaptureProvider = InputCaptureManager.getInputCaptureProvider(this, this);
 
@@ -2413,6 +2425,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
                 connected = true;
                 connecting = false;
+                updateMonitorButton();
                 updatePipAutoEnter();
 
                 // Hide the mouse cursor now after a short delay.
@@ -2484,6 +2497,151 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         LimeLog.info(String.format((Locale)null, "Rumble on gamepad triggers %d: %04x %04x", controllerNumber, leftTrigger, rightTrigger));
 
         controllerHandler.handleRumbleTriggers(controllerNumber, leftTrigger, rightTrigger);
+    }
+
+    private void setupMonitorButton() {
+        final FrameLayout parent = (FrameLayout) streamView.getParent();
+        final float density = getResources().getDisplayMetrics().density;
+
+        GradientDrawable background = new GradientDrawable();
+        background.setCornerRadius(20 * density);
+        background.setColor(0xCC202020);
+        background.setStroke((int) Math.max(1, density), 0x66FFFFFF);
+
+        monitorButton = new TextView(this);
+        monitorButton.setBackground(background);
+        monitorButton.setTextColor(0xFFFFFFFF);
+        monitorButton.setTextSize(14);
+        monitorButton.setGravity(Gravity.CENTER);
+        monitorButton.setPadding((int) (14 * density), (int) (8 * density),
+                (int) (14 * density), (int) (8 * density));
+        monitorButton.setContentDescription(getString(R.string.monitor_button_description));
+        monitorButton.setFocusable(false);
+        monitorButton.setVisibility(View.GONE);
+        monitorButton.setText(R.string.monitor_button_unknown);
+
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM | Gravity.END);
+        lp.setMargins(0, 0, (int) (16 * density), (int) (16 * density));
+        parent.addView(monitorButton, lp);
+
+        // A tap switches to the next monitor, dragging moves the button around
+        final int touchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
+        monitorButton.setOnTouchListener(new View.OnTouchListener() {
+            private float downRawX, downRawY, startTx, startTy;
+            private boolean dragging;
+
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                switch (event.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        downRawX = event.getRawX();
+                        downRawY = event.getRawY();
+                        startTx = v.getTranslationX();
+                        startTy = v.getTranslationY();
+                        dragging = false;
+                        return true;
+
+                    case MotionEvent.ACTION_MOVE: {
+                        float dx = event.getRawX() - downRawX;
+                        float dy = event.getRawY() - downRawY;
+                        if (!dragging && Math.hypot(dx, dy) > touchSlop) {
+                            dragging = true;
+                        }
+                        if (dragging) {
+                            // Keep the button fully inside the stream area
+                            float minTx = -v.getLeft();
+                            float maxTx = parent.getWidth() - v.getWidth() - v.getLeft();
+                            float minTy = -v.getTop();
+                            float maxTy = parent.getHeight() - v.getHeight() - v.getTop();
+                            v.setTranslationX(Math.max(minTx, Math.min(maxTx, startTx + dx)));
+                            v.setTranslationY(Math.max(minTy, Math.min(maxTy, startTy + dy)));
+                        }
+                        return true;
+                    }
+
+                    case MotionEvent.ACTION_UP:
+                        if (!dragging) {
+                            switchToNextHostMonitor();
+                        }
+                        return true;
+
+                    case MotionEvent.ACTION_CANCEL:
+                        return true;
+                }
+                return false;
+            }
+        });
+    }
+
+    private void updateMonitorButton() {
+        if (monitorButton == null) {
+            return;
+        }
+
+        if (!connected) {
+            monitorButton.setVisibility(View.GONE);
+            return;
+        }
+
+        if (hostMonitorKnown) {
+            monitorButton.setText(getString(R.string.monitor_button_format, hostMonitorIndex + 1));
+        }
+        else {
+            monitorButton.setText(R.string.monitor_button_unknown);
+        }
+        monitorButton.setVisibility(View.VISIBLE);
+    }
+
+    private void switchToNextHostMonitor() {
+        if (!connected || conn == null) {
+            return;
+        }
+
+        hostMonitorIndex = (hostMonitorIndex + 1) % HOST_MONITOR_COUNT;
+        hostMonitorKnown = true;
+        updateMonitorButton();
+        sendHostMonitorShortcut(hostMonitorIndex);
+    }
+
+    // Presses Ctrl+Alt+Shift+F<index+1> like a physical keyboard would. Sunshine needs to see the
+    // modifier key presses themselves, and it consumes the F key instead of passing it to the host.
+    private void sendHostMonitorShortcut(final int monitorIndex) {
+        final NvConnection connection = conn;
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final short vkLShift = (short) (0x8000 | 0xA0);
+                final short vkLControl = (short) (0x8000 | 0xA2);
+                final short vkLMenu = (short) (0x8000 | 0xA4); // Alt
+                final short vkFn = (short) (0x8000 | (KeyboardTranslator.VK_F1 + monitorIndex));
+
+                final byte ctrl = KeyboardPacket.MODIFIER_CTRL;
+                final byte ctrlShift = (byte) (ctrl | KeyboardPacket.MODIFIER_SHIFT);
+                final byte all = (byte) (ctrlShift | KeyboardPacket.MODIFIER_ALT);
+
+                try {
+                    connection.sendKeyboardInput(vkLControl, KeyboardPacket.KEY_DOWN, ctrl, (byte) 0);
+                    connection.sendKeyboardInput(vkLShift, KeyboardPacket.KEY_DOWN, ctrlShift, (byte) 0);
+                    connection.sendKeyboardInput(vkLMenu, KeyboardPacket.KEY_DOWN, all, (byte) 0);
+                    Thread.sleep(20);
+                    connection.sendKeyboardInput(vkFn, KeyboardPacket.KEY_DOWN, all, (byte) 0);
+                    Thread.sleep(20);
+                    connection.sendKeyboardInput(vkFn, KeyboardPacket.KEY_UP, all, (byte) 0);
+                    connection.sendKeyboardInput(vkLMenu, KeyboardPacket.KEY_UP, ctrlShift, (byte) 0);
+                    connection.sendKeyboardInput(vkLShift, KeyboardPacket.KEY_UP, ctrl, (byte) 0);
+                    connection.sendKeyboardInput(vkLControl, KeyboardPacket.KEY_UP, (byte) 0, (byte) 0);
+                } catch (InterruptedException e) {
+                    // Make sure the modifiers don't stay stuck down on the host
+                    connection.sendKeyboardInput(vkLMenu, KeyboardPacket.KEY_UP, ctrlShift, (byte) 0);
+                    connection.sendKeyboardInput(vkLShift, KeyboardPacket.KEY_UP, ctrl, (byte) 0);
+                    connection.sendKeyboardInput(vkLControl, KeyboardPacket.KEY_UP, (byte) 0, (byte) 0);
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }, "MonitorSwitch").start();
     }
 
     @Override
