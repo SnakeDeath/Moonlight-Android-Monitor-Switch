@@ -3,13 +3,14 @@
 > **This is NOT the official Moonlight app.** It is an unofficial, modified copy of
 > [Moonlight Android](https://github.com/moonlight-stream/moonlight-android) that I edited
 > for my own personal use. The only change is a floating button on the stream screen that
-> switches the host between two monitors. It sends the Ctrl+Alt+Shift+F1/F2 shortcut that
+> switches the host between two monitors.Made with the help of Claude so if you have anything against AI dont use it.
+> It sends the Ctrl+Alt+Shift+F1/F2 shortcut that
 > Sunshine already supports.
 >
 > All credit goes to the original authors of Moonlight and the Moonlight team. This project
 > is licensed under the GNU GPL v3, the same as the original. See `LICENSE.txt`.
 > Please don't report problems with this version to the official project.
-> Made with the help of Claude so if you have anything against AI dont use it
+
 ---
 
 ## What I changed
