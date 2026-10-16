@@ -9,7 +9,7 @@
 > All credit goes to the original authors of Moonlight and the Moonlight team. This project
 > is licensed under the GNU GPL v3, the same as the original. See `LICENSE.txt`.
 > Please don't report problems with this version to the official project.
-
+> Made with the help of Claude so if you have anything against AI dont use it
 ---
 
 ## What I changed
